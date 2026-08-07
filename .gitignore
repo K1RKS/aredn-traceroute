@@ -1,0 +1,6 @@
+# Rebuild with ./build.sh
+dist/
+
+# Local-only remote APK install helper
+/install_package_remotely
+/install_package_remotely.conf

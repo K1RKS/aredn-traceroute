@@ -1,0 +1,15 @@
+# Defaults for install_package_remotely (sourced by the script).
+# Copy to install_package_remotely.conf (gitignored) and adjust.
+# CLI arguments override these values.
+#
+# If -apk is omitted, the newest *.apk in PACKAGE_PATH is used (by file
+# mtime). A short name such as -apk aredn-traceroute selects the newest match,
+# e.g. aredn-traceroute-0.1.13-r0.apk.
+#
+# Optional:
+# SSH_USER=root
+# SSH_PORT=2222
+# REMOTE_DIR=/tmp
+
+PACKAGE_PATH=dist/
+NODE=k1rks-x86-development.local.mesh

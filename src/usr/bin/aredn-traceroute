@@ -1,0 +1,111 @@
+#!/usr/bin/ucode
+/*
+ * AREDN enriched traceroute CLI — link type, Babel cost/metric; optional GPS.
+ */
+
+import * as atr from "aredn_traceroute";
+import * as configuration from "aredn.configuration";
+
+function usage()
+{
+    print("Usage: aredn-traceroute [options] <destination>\n");
+    print("  Runs traceroute and appends per-hop link type and Babel path metric.\n");
+    print("  Link type (and optional tx/rx fields) come from the previous hop's LQM.\n");
+    print("  Each node is queried at most once via /a/sysinfo?lqm=1.\n");
+    print("  Banner (after traceroute to …) shows package version and Babel path metric.\n");
+    print("\n");
+    print("  Example hop (defaults; -tx_rx_info on):\n");
+    print("    1 nocall-x86-node (10.1.2.3) 23 ms DtD 96/96 (100%/100%) 352 0%\n");
+    print("\n");
+    print("  Fields:\n");
+    print("    hop#       Traceroute hop number (TTL).\n");
+    print("    name (ip)  Hop hostname and address.\n");
+    print("    RTT        Round-trip time in whole milliseconds.\n");
+    print("    type       Incoming link type: DtD, RF, WG, or Xlink.\n");
+    print("    tx/rx      LQM txcost/rxcost from the previous hop (with -tx_rx_info).\n");
+    print("    (tx%/rx%)  TX/RX success from LQM rev_lq/lq (with -tx_rx_info).\n");
+    print("    met        Babel path metric from this node to the hop.\n");
+    print("    err        Neighbor errors% = 100-rev_quality (with -tx_rx_info).\n");
+    print("    With -gps: lat,lon after RTT.  With --node_version: firmware at end.\n");
+    print("\n");
+    print("  -tx_rx_info       Include txcost/rxcost, (tx%/rx%), neighborErrors% (default)\n");
+    print("  -no_tx_rx_info    Omit those tx/rx fields (wins over -tx_rx_info)\n");
+    print("  --node_version    Append each hop's AREDN firmware_version (off by default)\n");
+    print("  -gps              Include per-hop GPS coordinates (off by default)\n");
+    print("  -verbose          Explain why displayed fields are unset (-)\n");
+};
+
+let verbose = false;
+let gps = false;
+let txRxInfo = true;
+let noTxRxInfo = false;
+let nodeVersion = false;
+let dest = null;
+for (let i = 0; i < length(ARGV); i++) {
+    const a = ARGV[i];
+    if (a === "-h" || a === "--help") {
+        usage();
+        exit(0);
+    }
+    if (a === "-verbose" || a === "--verbose" || a === "-v") {
+        verbose = true;
+        continue;
+    }
+    if (a === "-gps" || a === "--gps") {
+        gps = true;
+        continue;
+    }
+    if (a === "-tx_rx_info" || a === "--tx_rx_info" || a === "--tx-rx-info") {
+        txRxInfo = true;
+        continue;
+    }
+    if (a === "-no_tx_rx_info" || a === "--no_tx_rx_info" || a === "--no-tx-rx-info" || a === "-no-tx-rx-info") {
+        noTxRxInfo = true;
+        continue;
+    }
+    if (a === "-node_version" || a === "--node_version" || a === "--node-version") {
+        nodeVersion = true;
+        continue;
+    }
+    if (match(a, /^-/)) {
+        print(`Unknown option: ${a}\n`);
+        usage();
+        exit(1);
+    }
+    if (dest) {
+        print("Only one destination is allowed\n");
+        usage();
+        exit(1);
+    }
+    dest = a;
+}
+
+/* -no_tx_rx_info wins over -tx_rx_info regardless of order. */
+if (noTxRxInfo) {
+    txRxInfo = false;
+}
+
+if (!dest) {
+    usage();
+    exit(1);
+}
+
+if (match(dest, /[^0-9a-zA-Z.\-]/)) {
+    print("Illegal destination name\n");
+    exit(1);
+}
+
+const node = configuration.getName() || "?";
+const destMetric = atr.lookupDestPathMetric(dest);
+const headerLine = atr.formatBanner(node, dest, destMetric);
+
+const ok = atr.runEnrichedTraceroute(dest, function (line) {
+    print(`${line}\n`);
+}, {
+    verbose: verbose,
+    gps: gps,
+    txRxInfo: txRxInfo,
+    nodeVersion: nodeVersion,
+    headerLine: headerLine
+});
+exit(ok ? 0 : 1);
