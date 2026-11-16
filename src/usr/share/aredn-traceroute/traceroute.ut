@@ -49,14 +49,19 @@ const mynode = configuration.getName();
             <div class="tool-console">
                 <pre></pre>
             </div>
-            <div style="display:flex;flex-direction:column;gap:6px;align-items:stretch">
+            <div>
                 <button id="tool-start">Go</button>
-                <button id="tool-copy" type="button" disabled title="Copy console output">Copy</button>
-                <button id="tool-copy-json" type="button" disabled title="Copy schemaVersion-1 JSON (source must have aredn-traceroute)">Copy JSON</button>
             </div>
         </div>
     </div>
-    {{_R("tool-footer")}}
+    <div class="ctrl-modal-footer">
+        <hr/>
+        <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap">
+            <button id="tool-copy" type="button" disabled title="Copy console output">Copy</button>
+            <button id="tool-copy-json" type="button" disabled title="Copy schemaVersion-1 JSON (source must have aredn-traceroute)">Copy JSON</button>
+            <button id="dialog-done" onclick="setTimeout(_ => document.getElementById('ctrl-modal').close(), 10)">Done</button>
+        </div>
+    </div>
     <script>
     (function(){
         {{_R("open")}}

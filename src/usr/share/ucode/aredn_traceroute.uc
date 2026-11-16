@@ -253,7 +253,7 @@ export function shortMeshName(name)
 /* Keep in sync with build.sh -v/-r (and bump-traceroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.27-r0";
+    return "0.1.28-r0";
 };
 
 /**

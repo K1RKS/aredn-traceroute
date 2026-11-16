@@ -14,7 +14,7 @@ Example (default: tx/rx info on, no GPS, no node version):
 
 ```text
 traceroute to nodeD.local.mesh (10.1.2.5), 30 hops max, 46 byte packets
-Aredn-Traceroute(0.1.27-r0): Babel Metric 4078
+Aredn-Traceroute(0.1.28-r0): Babel Metric 4078
  1 nodeB (10.1.2.3) 23 ms DtD 96/96 (100%/100%) 352 0%
  2 nodeC (10.1.2.4) 123 ms RF 3593/3520 (98%/99%) 3945 1%
  3 nodeD (175.0.1.3) 19 ms WG 133/133 (100%/100%) 4078 0%
@@ -42,9 +42,9 @@ With `-gps`:
 
 ## Install
 
-1. Build (or download) `aredn-traceroute-0.1.27-r0.apk`
+1. Build (or download) `aredn-traceroute-0.1.28-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted aredn-traceroute-0.1.27-r0.apk`
+   or: `apk add --allow-untrusted aredn-traceroute-0.1.28-r0.apk`
 3. Tools → Traceroute uses the drop-in CGI and Tools UI (Copy / Copy JSON) when this package is installed on the **node you open Tools on**; enriched hop lines need the package on the **source** node (GPS off unless `gps=1` is in the query string; `node_version=1` / `tx_rx_info=0` supported). After install, wait a few seconds for `uhttpd` to refresh so the new buttons appear.
 4. CLI: `aredn-traceroute <destination>`  
    GPS: `aredn-traceroute -gps <destination>`  
@@ -63,14 +63,14 @@ On install, the package backs up the firmware `/www/cgi-bin/traceroute` (when pr
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/aredn-traceroute-0.1.27-r0.apk
+# → dist/aredn-traceroute-0.1.28-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
 
 ## Tools UI copy buttons
 
-When this package is installed, Tools → Traceroute gains:
+When this package is installed, Tools → Traceroute gains footer buttons (next to Done):
 
 - **Copy** — clipboard of the console text after a run
 - **Copy JSON** — fetches `/cgi-bin/traceroute?…&format=json` from the **source** node and copies pretty-printed `schemaVersion: 1` JSON (source must also have this package)
