@@ -7,6 +7,7 @@ chmod +x \
   src/usr/bin/aredn-traceroute \
   src/usr/share/aredn-traceroute/cgi-bin-traceroute \
   src/usr/share/aredn-traceroute/cgi-swap.sh \
+  src/usr/share/aredn-traceroute/uhttpd-delay-run.sh \
   src/usr/share/aredn-traceroute/traceroute.firmware.default \
   src/.post-install \
   src/.post-upgrade \
@@ -14,7 +15,7 @@ chmod +x \
   tools/mkapk.py
 python3 tools/mkapk.py \
   -n aredn-traceroute \
-  -v 0.1.26 \
+  -v 0.1.27 \
   -r r0 \
   -a noarch \
   -d src \

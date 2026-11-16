@@ -1,6 +1,11 @@
 #!/bin/sh
-# Backup stock Tools traceroute CGI, then install our drop-in.
+# Backup stock Tools traceroute CGI + UI, then install our drop-ins.
 . /usr/share/aredn-traceroute/cgi-swap.sh 2>/dev/null || exit 0
 backup_stock_cgi
 install_ours_cgi
+backup_stock_ui
+install_ours_ui
+chmod 755 /usr/share/aredn-traceroute/uhttpd-delay-run.sh 2>/dev/null || true
+# Detached delayed restart so Tools pageCache picks up traceroute.ut.
+schedule_uhttpd_after_install 5
 exit 0

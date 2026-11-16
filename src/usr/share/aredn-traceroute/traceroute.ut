@@ -1,0 +1,292 @@
+{%
+/*
+ * Tools → Traceroute dialog (aredn-traceroute drop-in).
+ * Based on AREDN firmware tools/e/traceroute.ut; adds Copy / Copy JSON.
+ * Marker: aredn-traceroute-ui
+ */
+%}
+{%
+const nodes = mesh.getNodeList();
+const mynode = configuration.getName();
+%}
+<div class="dialog wide">
+    {{_R("tool-header", "Traceroute")}}
+    <div class="simple-tool compact client-server">
+        <div class="cols">
+            <div>
+                <div class="o">Target A&zwnj;ddress</div>
+                <div class="m">IP A&zwnj;ddress, Hostname or Node</div>
+            </div>
+            <div>
+                <input id="tool-target" type="text" size="40" required list="mesh-nodes">
+                <button id="target-swap"><div class="icon updownarrow"></div></button>
+            </div>
+        </div>
+        <div class="cols">
+            <div>
+                <div class="o">Source A&zwnj;ddress</div>
+                <div class="m">Node name or a&zwnj;ddress</div>
+            </div>
+            <div>
+                <input id="tool-client" type="text" size="40" required value="{{mynode}}" list="mesh-nodes">
+                <div id="target-swap-dummy" style="width:42px"></div>
+            </div>
+        </div>
+        <datalist id="mesh-nodes">
+            <option value="{{mynode}}">{{mynode}}</option>
+            {%
+                for (let i = 0; i < length(nodes); i++) {
+                    const nn = nodes[i].name;
+                    if (nn !== mynode) {
+                        print(`<option value="${nn}">${nn}</option>`);
+                    }
+                }
+            %}
+        </datalist>
+        {{_H("Trace the route between a source host and a target. The source should be node on the mesh, and by default is the current node.
+        The target can be a node, an IP address, or any hostname that might be reachable. Copy / Copy JSON need a completed run; JSON requires aredn-traceroute on the source.")}}
+        <div class="cols">
+            <div class="tool-console">
+                <pre></pre>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;align-items:stretch">
+                <button id="tool-start">Go</button>
+                <button id="tool-copy" type="button" disabled title="Copy console output">Copy</button>
+                <button id="tool-copy-json" type="button" disabled title="Copy schemaVersion-1 JSON (source must have aredn-traceroute)">Copy JSON</button>
+            </div>
+        </div>
+    </div>
+    {{_R("tool-footer")}}
+    <script>
+    (function(){
+        {{_R("open")}}
+        {% if (!request.mobile) { %}
+        htmx.find("#tool-target").focus();
+        {% } %}
+        const mynode = "{{mynode}}";
+        const btnCopy = htmx.find("#tool-copy");
+        const btnCopyJson = htmx.find("#tool-copy-json");
+        let lastJsonText = "";
+        let lastJsonUrl = "";
+        let jsonFetchGen = 0;
+        function setCopyEnabled(on) {
+            btnCopy.disabled = !on;
+        }
+        function setCopyJsonEnabled(on) {
+            btnCopyJson.disabled = !on;
+            if (!on) {
+                btnCopyJson.textContent = "Copy JSON";
+            }
+        }
+        function resetCopyState() {
+            lastJsonText = "";
+            lastJsonUrl = "";
+            jsonFetchGen++;
+            setCopyEnabled(false);
+            setCopyJsonEnabled(false);
+            btnCopy.textContent = "Copy";
+            btnCopyJson.textContent = "Copy JSON";
+        }
+        async function copyToClipboard(text, btn, idleLabel) {
+            if (!text) {
+                return;
+            }
+            const label = idleLabel || btn.textContent;
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(text);
+                }
+                else {
+                    const ta = document.createElement("textarea");
+                    ta.value = text;
+                    ta.setAttribute("readonly", "");
+                    ta.style.position = "fixed";
+                    ta.style.left = "-9999px";
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand("copy");
+                    ta.remove();
+                }
+                btn.textContent = "Copied";
+                setTimeout(() => { btn.textContent = label; }, 1200);
+            }
+            catch (_) {
+                btn.textContent = "Failed";
+                setTimeout(() => { btn.textContent = label; }, 1200);
+            }
+        }
+        function consoleText() {
+            const con = htmx.find(".tool-console pre");
+            return (con && con.innerText) ? con.innerText.replace(/\s+$/, "") : "";
+        }
+        function meshHost(name) {
+            return `${name}${name.indexOf(".") == -1 ? ".local.mesh" : ""}`;
+        }
+        async function fetchJsonReport(url, gen) {
+            btnCopyJson.textContent = "Fetching…";
+            setCopyJsonEnabled(false);
+            try {
+                const r = await fetch(url);
+                if (gen !== jsonFetchGen) {
+                    return;
+                }
+                if (!r.ok) {
+                    throw new Error(`HTTP ${r.status}`);
+                }
+                const raw = (await r.text()).trim();
+                if (!raw) {
+                    throw new Error("empty JSON");
+                }
+                let pretty = raw;
+                try {
+                    const doc = JSON.parse(raw);
+                    if (!doc || doc.schemaVersion == null) {
+                        throw new Error("not schemaVersion JSON");
+                    }
+                    pretty = JSON.stringify(doc, null, 2);
+                }
+                catch (e) {
+                    throw e;
+                }
+                if (gen !== jsonFetchGen) {
+                    return;
+                }
+                lastJsonText = pretty;
+                lastJsonUrl = url;
+                btnCopyJson.textContent = "Copy JSON";
+                setCopyJsonEnabled(true);
+            }
+            catch (_) {
+                if (gen !== jsonFetchGen) {
+                    return;
+                }
+                lastJsonText = "";
+                btnCopyJson.textContent = "Copy JSON";
+                setCopyJsonEnabled(false);
+            }
+        }
+        htmx.on("#target-swap", "click", _ => {
+            const v = htmx.find("#tool-target").value;
+            htmx.find("#tool-target").value = htmx.find("#tool-client").value;
+            htmx.find("#tool-client").value = v;
+        });
+        htmx.on("#tool-copy", "click", async _ => {
+            await copyToClipboard(consoleText(), btnCopy, "Copy");
+        });
+        htmx.on("#tool-copy-json", "click", async _ => {
+            if (!lastJsonText && lastJsonUrl) {
+                await fetchJsonReport(lastJsonUrl, jsonFetchGen);
+            }
+            if (lastJsonText) {
+                await copyToClipboard(lastJsonText, btnCopyJson, "Copy JSON");
+            }
+        });
+        htmx.on("#tool-start", "click", async _ => {
+            const server = htmx.find("#tool-target").value;
+            const client = htmx.find("#tool-client").value;
+            if (server && client) {
+                resetCopyState();
+                const con = htmx.find(".tool-console pre");
+                con.innerText = "";
+                let runOk = false;
+                function out(line) {
+                    con.innerHTML += `${line}\n`;
+                }
+                out("Traceroute test started");
+                out("");
+                try {
+                    const host = meshHost(client);
+                    const target = meshHost(server);
+                    const url = `http://${host}/cgi-bin/traceroute?server=${encodeURIComponent(target)}`;
+                    lastJsonUrl = `${url}&format=json`;
+                    const r = await fetch(url);
+                    const reader = r.body.getReader();
+                    let state = "BEGIN";
+                    for (;;) {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            if (state !== "DONE") {
+                                out("Traceroute Terminated.");
+                            }
+                            break;
+                        }
+                        const lines = String.fromCharCode.apply(null, value).split("\n");
+                        lines.forEach(line => {
+                            line = line.trim();
+                            switch (state) {
+                                case "BEGIN":
+                                {
+                                    const m = line.match(/<title>(.*)<\/title>/);
+                                    if (m) {
+                                        if (m[1] === "SUCCESS") {
+                                            state = "CONNECTING";
+                                            out(`Source: ${client}`);
+                                            out(`Target: ${server}`);
+                                            out("");
+                                        }
+                                        else {
+                                            state = "ERROR";
+                                            const m = line.match(/<pre>(.*)<\/pre>/);
+                                            if (m) {
+                                                out(`ERROR: ${m[1]}`);
+                                                state = "DONE";
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                                case "CONNECTING":
+                                    if (line.match(/^traceroute/)) {
+                                        state = "PRINT";
+                                        out(line.replace(".local.mesh", ""));
+                                    }
+                                    break;
+                                case "PRINT":
+                                    if (line) {
+                                        if (line === "</pre></body></html>") {
+                                            state = "DONE";
+                                            runOk = true;
+                                            out("");
+                                            out("Traceroute done");
+                                            out("");
+                                            out(Date().toString());
+                                        }
+                                        else {
+                                            const m = line.match(/^[0-9]+ +(.+\.local\.mesh) /);
+                                            if (m) {
+                                                line = line.replace(m[1], `<a href="http://${m[1]}">${m[1].replace(".local.mesh", "")}</a>`);
+                                            }
+                                            out(line);
+                                        }
+                                    }
+                                    break;
+                                case "ERROR":
+                                {
+                                    const m = line.match(/<pre>(.*)<\/pre>/);
+                                    if (m) {
+                                        out(`ERROR: ${m[1]}`);
+                                        state = "DONE";
+                                    }
+                                    break;
+                                }
+                                case "DONE":
+                                default:
+                                    break;
+                            }
+                        });
+                    }
+                }
+                catch (_) {
+                    out("Traceroute Failed.");
+                }
+                if (consoleText()) {
+                    setCopyEnabled(true);
+                }
+                if (runOk && lastJsonUrl) {
+                    setCopyJsonEnabled(true);
+                }
+            }
+        });
+    })();
+    </script>
+</div>

@@ -1,6 +1,11 @@
 #!/bin/sh
-# Re-apply drop-in CGI after package upgrade.
+# Re-apply drop-in CGI + Tools UI after package upgrade.
 . /usr/share/aredn-traceroute/cgi-swap.sh 2>/dev/null || exit 0
 backup_stock_cgi
 install_ours_cgi
+backup_stock_ui
+install_ours_ui
+chmod 755 /usr/share/aredn-traceroute/uhttpd-delay-run.sh 2>/dev/null || true
+# Cancels any uninstall-scheduled restart from .pre-deinstall, then reschedules.
+schedule_uhttpd_after_install 5
 exit 0
