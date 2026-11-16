@@ -42,15 +42,17 @@ With `-gps`:
 
 ## Install
 
-1. Build (or download) `aredn-traceroute-0.1.25-r0.apk`
+1. Build (or download) `aredn-traceroute-0.1.26-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted aredn-traceroute-0.1.25-r0.apk`
+   or: `apk add --allow-untrusted aredn-traceroute-0.1.26-r0.apk`
 3. Tools → Traceroute uses the drop-in CGI automatically when this package is installed on the **source** node (GPS off unless `gps=1` is in the query string; `node_version=1` / `tx_rx_info=0` supported).
 4. CLI: `aredn-traceroute <destination>`  
    GPS: `aredn-traceroute -gps <destination>`  
    No tx/rx columns: `aredn-traceroute -no_tx_rx_info <destination>`  
    Firmware versions: `aredn-traceroute --node_version <destination>`  
-   Verbose: `aredn-traceroute -verbose <destination>`
+   Verbose: `aredn-traceroute -verbose <destination>`  
+   JSON (schemaVersion 1): `aredn-traceroute -json <destination>`  
+   CGI JSON: `/cgi-bin/traceroute?server=<dest>&format=json`
 
 When traceroute only returns an IP for a hop, the display name is filled from that hop’s `/a/sysinfo` `node` field, or from the previous hop’s LQM neighbor hostname. The `(IP)` still shows the hop address. If the previous hop’s traceroute IP failed sysinfo but its name was learned from the hop before that, later lookups re-fetch that previous hop via its mesh hostname (and mesh IP) so LQM/type/cost/metric/name can still be resolved.
 
@@ -61,10 +63,19 @@ On install, the package backs up the firmware `/www/cgi-bin/traceroute` (when pr
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/aredn-traceroute-0.1.25-r0.apk
+# → dist/aredn-traceroute-0.1.26-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
+
+## JSON export (`-json` / `format=json`)
+
+Emits a `schemaVersion: 1` document shared with stableroute and Nodographer visual traceroute:
+
+- `tool`: `"aredn-traceroute"`
+- `paths`: one entry with `hops[]` (`hop`, `hostname`, `ip`, `linkType`, `rttMs`, optional `lat`/`lon`)
+- Text output remains the default for Tools → Traceroute
+
 
 ## How enrichment works
 

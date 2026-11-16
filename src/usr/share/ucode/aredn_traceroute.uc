@@ -253,7 +253,101 @@ export function shortMeshName(name)
 /* Keep in sync with build.sh -v/-r (and bump-traceroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.25-r0";
+    return "0.1.26-r0";
+};
+
+/**
+ * Visual-traceroute / meshinfo shared schema (schemaVersion 1).
+ * traceroute emits one path; stableroute emits many.
+ */
+export function hopIdentity(hop)
+{
+    if (!hop || hop.unreachable) {
+        return "*";
+    }
+    const host = shortMeshName(hop.hostname);
+    if (host && host !== hop.ip) {
+        return lc(host);
+    }
+    if (hop.ip) {
+        return hop.ip;
+    }
+    return "*";
+};
+
+export function pathKeyFromHops(hops)
+{
+    const parts = [];
+    for (let i = 0; i < length(hops); i++) {
+        push(parts, hopIdentity(hops[i]));
+    }
+    return join("|", parts);
+};
+
+function rttMsNumber(rtt)
+{
+    if (rtt == null || rtt === "") {
+        return null;
+    }
+    const n = rtt * 1;
+    if (n != n) {
+        return null;
+    }
+    return int(n + (n < 0 ? -0.5 : 0.5));
+};
+
+export function buildTracerouteJson(dest, hops, options)
+{
+    const destShort = shortMeshName(dest);
+    const reached = !!(options && options.reached);
+    const using = (options && options.using) || "aredn-traceroute";
+    const babelMetric = (options && options.babelMetric != null) ? options.babelMetric : null;
+    const outHops = [];
+    for (let i = 0; i < length(hops); i++) {
+        const h = hops[i] || {};
+        const rec = {
+            hop: h.hop,
+            hostname: h.unreachable ? null : shortMeshName(h.hostname),
+            ip: h.unreachable ? null : (h.ip || null),
+            linkType: h.linkType || null,
+            rttMs: h.unreachable ? null : rttMsNumber(h.rtt),
+            rttAvgMs: null,
+            rttDevMs: null,
+            lat: h.lat != null && h.lat !== "" ? (h.lat * 1) : null,
+            lon: h.lon != null && h.lon !== "" ? (h.lon * 1) : null,
+            unreachable: !!h.unreachable
+        };
+        if (h.metric != null) {
+            rec.metric = h.metric;
+        }
+        push(outHops, rec);
+    }
+    return {
+        schemaVersion: 1,
+        tool: "aredn-traceroute",
+        version: packageVersion(),
+        destination: destShort,
+        source: null,
+        using: using,
+        runs: 1,
+        babelMetric: babelMetric,
+        summary: {
+            uniquePaths: 1,
+            shortest: length(outHops),
+            longest: length(outHops),
+            unreachable: reached ? 0 : 1,
+            mostCommonCount: 1
+        },
+        paths: [
+            {
+                index: 1,
+                key: pathKeyFromHops(hops),
+                count: 1,
+                reached: reached,
+                hops: outHops
+            }
+        ]
+    };
 };
 
 export function formatBanner(node, dest, destMetric)
@@ -781,7 +875,18 @@ export function enrichHop(ctx, prevKey, hop)
         return {
             line: ` ${hop.hop}  * * *`,
             notes: [ "    # unreachable hop (* * *); no GPS/link metadata" ],
-            nextKey: prevKey
+            nextKey: prevKey,
+            record: {
+                hop: hop.hop,
+                hostname: null,
+                ip: null,
+                rtt: null,
+                linkType: null,
+                lat: null,
+                lon: null,
+                metric: null,
+                unreachable: true
+            }
         };
     }
     let node = ensureNode(ctx, hop.ip || hop.hostname);
@@ -899,7 +1004,18 @@ export function enrichHop(ctx, prevKey, hop)
     return {
         line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.txcost, link.rxcost, link.txSuccess, link.rxSuccess, pathMetric.metric, link.neighborErrors, firmwareVersion, wantGps, txRxInfo, nodeVersion),
         notes: notes,
-        nextKey: nextKey
+        nextKey: nextKey,
+        record: {
+            hop: hop.hop,
+            hostname: hostname,
+            ip: hop.ip,
+            rtt: hop.rtt,
+            linkType: link.type || null,
+            lat: lat,
+            lon: lon,
+            metric: pathMetric.metric,
+            unreachable: false
+        }
     };
 };
 
@@ -911,18 +1027,20 @@ export function enrichHop(ctx, prevKey, hop)
  * options.nodeVersion: append firmware_version from hop sysinfo (off by default).
  * options.headerLine: printed immediately after the stock "traceroute to …" banner
  *   so Tools → Traceroute (which skips lines until that banner) still shows it.
- * Returns true on success.
+ * options.collectHops: when true, also return { ok, hops, dest } for JSON export.
+ * Returns true on success, or { ok, hops, dest } when collectHops is set.
  */
 export function runEnrichedTraceroute(dest, printFn, options)
 {
     if (!dest) {
-        return false;
+        return options && options.collectHops ? { ok: false, hops: [], dest: dest } : false;
     }
     if (!match(dest, /\./) && !match(dest, /^[0-9.]+$/)) {
         dest = `${dest}.local.mesh`;
     }
     const verbose = options && options.verbose;
     const headerLine = options && options.headerLine;
+    const collectHops = !!(options && options.collectHops);
     let headerPending = headerLine ? true : false;
     const ctx = createContext();
     ctx.wantGps = !!(options && options.gps);
@@ -931,41 +1049,86 @@ export function runEnrichedTraceroute(dest, printFn, options)
     seedLocalRouteMetrics(ctx);
     seedLocal(ctx);
     let prevKey = ctx.localKey;
+    const hops = [];
 
     const running = fs.popen(`/bin/traceroute -q 1 -w 1 ${dest} 2>&1`);
     if (!running) {
-        return false;
+        return collectHops ? { ok: false, hops: hops, dest: dest } : false;
     }
     for (let line = running.read("line"); length(line); line = running.read("line")) {
         line = replace(line, /\r?\n$/, "");
         const hop = parseHopLine(line);
         if (hop) {
-            if (headerPending) {
+            if (headerPending && printFn) {
                 printFn(headerLine);
                 headerPending = false;
             }
             const enriched = enrichHop(ctx, prevKey, hop);
-            printFn(enriched.line);
-            if (verbose && enriched.notes) {
-                for (let i = 0; i < length(enriched.notes); i++) {
-                    printFn(enriched.notes[i]);
+            if (printFn) {
+                printFn(enriched.line);
+                if (verbose && enriched.notes) {
+                    for (let i = 0; i < length(enriched.notes); i++) {
+                        printFn(enriched.notes[i]);
+                    }
                 }
+            }
+            if (collectHops && enriched.record) {
+                push(hops, enriched.record);
             }
             if (!hop.unreachable) {
                 prevKey = enriched.nextKey;
             }
         }
         else {
-            printFn(line);
+            if (printFn) {
+                printFn(line);
+            }
             if (headerPending && match(line, /^traceroute/)) {
-                printFn(headerLine);
+                if (printFn) {
+                    printFn(headerLine);
+                }
                 headerPending = false;
             }
         }
     }
-    if (headerPending) {
+    if (headerPending && printFn) {
         printFn(headerLine);
     }
     running.close();
+    if (collectHops) {
+        return { ok: true, hops: hops, dest: dest };
+    }
     return true;
+};
+
+/**
+ * Run traceroute and return schemaVersion-1 JSON document (no text print).
+ */
+export function runEnrichedTracerouteJson(dest, options)
+{
+    const destMetric = lookupDestPathMetric(dest);
+    const result = runEnrichedTraceroute(dest, null, {
+        verbose: false,
+        gps: !!(options && options.gps),
+        txRxInfo: !(options && options.txRxInfo === false),
+        nodeVersion: !!(options && options.nodeVersion),
+        collectHops: true
+    });
+    if (!result || !result.ok) {
+        return {
+            ok: false,
+            doc: buildTracerouteJson(dest, [], {
+                reached: false,
+                babelMetric: destMetric
+            })
+        };
+    }
+    const reached = length(result.hops) > 0 && !result.hops[length(result.hops) - 1].unreachable;
+    return {
+        ok: true,
+        doc: buildTracerouteJson(result.dest, result.hops, {
+            reached: reached,
+            babelMetric: destMetric
+        })
+    };
 };

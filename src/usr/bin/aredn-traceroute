@@ -33,6 +33,7 @@ function usage()
     print("  --node_version    Append each hop's AREDN firmware_version (off by default)\n");
     print("  -gps              Include per-hop GPS coordinates (off by default)\n");
     print("  -verbose          Explain why displayed fields are unset (-)\n");
+    print("  -json             Emit schemaVersion-1 JSON (for meshmap / meshinfo)\n");
 };
 
 let verbose = false;
@@ -40,6 +41,7 @@ let gps = false;
 let txRxInfo = true;
 let noTxRxInfo = false;
 let nodeVersion = false;
+let wantJson = false;
 let dest = null;
 for (let i = 0; i < length(ARGV); i++) {
     const a = ARGV[i];
@@ -49,6 +51,10 @@ for (let i = 0; i < length(ARGV); i++) {
     }
     if (a === "-verbose" || a === "--verbose" || a === "-v") {
         verbose = true;
+        continue;
+    }
+    if (a === "-json" || a === "--json") {
+        wantJson = true;
         continue;
     }
     if (a === "-gps" || a === "--gps") {
@@ -93,6 +99,16 @@ if (!dest) {
 if (match(dest, /[^0-9a-zA-Z.\-]/)) {
     print("Illegal destination name\n");
     exit(1);
+}
+
+if (wantJson) {
+    const result = atr.runEnrichedTracerouteJson(dest, {
+        gps: gps,
+        txRxInfo: txRxInfo,
+        nodeVersion: nodeVersion
+    });
+    print(sprintf("%J\n", result.doc));
+    exit(result.ok ? 0 : 1);
 }
 
 const node = configuration.getName() || "?";

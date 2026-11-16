@@ -14,7 +14,7 @@ chmod +x \
   tools/mkapk.py
 python3 tools/mkapk.py \
   -n aredn-traceroute \
-  -v 0.1.25 \
+  -v 0.1.26 \
   -r r0 \
   -a noarch \
   -d src \

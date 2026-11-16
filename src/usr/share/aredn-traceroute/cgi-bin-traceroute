@@ -6,7 +6,7 @@
  * so the Tools UI, which skips pre-banner lines, still displays it.
  *
  * Query flags:
- *   verbose=1, gps=1, node_version=1
+ *   verbose=1, gps=1, node_version=1, format=json
  *   tx_rx_info=0 or no_tx_rx_info=1  (tx/rx fields on by default)
  */
 
@@ -22,17 +22,54 @@ const verbose = match(q, /(^|&)verbose=1(&|$)/) ? true : false;
 const gps = match(q, /(^|&)gps=1(&|$)/) ? true : false;
 const nodeVersion = match(q, /(^|&)node_version=1(&|$)/) ? true : false;
 const txRxInfo = match(q, /(^|&)(tx_rx_info=0|no_tx_rx_info=1)(&|$)/) ? false : true;
+const wantJson = match(q, /(^|&)format=json(&|$)/) ? true : false;
 
-print("Content-type: text/html\r\n");
+if (wantJson) {
+    print("Content-type: application/json\r\n");
+}
+else {
+    print("Content-type: text/html\r\n");
+}
 print("Cache-Control: no-store\r\n");
 print("Access-Control-Allow-Origin: *\r\n");
 print("\r\n");
 
 if (!server) {
-    print("<html><head><title>ERROR</title></head><body><pre>Provide a server name to run a test between this client and a server [/cgi-bin/traceroute?server=&lt;ServerName&gt;</pre></body></html>\n");
+    if (wantJson) {
+        print(sprintf("%J\n", {
+            schemaVersion: 1,
+            tool: "aredn-traceroute",
+            error: "Provide a server name [/cgi-bin/traceroute?server=<ServerName>&format=json]"
+        }));
+    }
+    else {
+        print("<html><head><title>ERROR</title></head><body><pre>Provide a server name to run a test between this client and a server [/cgi-bin/traceroute?server=&lt;ServerName&gt;</pre></body></html>\n");
+    }
 }
 else if (match(server, /[^0-9a-zA-Z.\-]/)) {
-    print("<html><head><title>ERROR</title></head><body><pre>Illegal server name</pre></body></html>\n");
+    if (wantJson) {
+        print(sprintf("%J\n", {
+            schemaVersion: 1,
+            tool: "aredn-traceroute",
+            error: "Illegal server name"
+        }));
+    }
+    else {
+        print("<html><head><title>ERROR</title></head><body><pre>Illegal server name</pre></body></html>\n");
+    }
+}
+else if (wantJson) {
+    if (!match(server, /\./)) {
+        server += ".local.mesh";
+    }
+    const result = atr.runEnrichedTracerouteJson(server, {
+        gps: gps,
+        txRxInfo: txRxInfo,
+        nodeVersion: nodeVersion
+    });
+    const doc = result.doc;
+    doc.source = atr.shortMeshName(node);
+    print(sprintf("%J\n", doc));
 }
 else {
     if (!match(server, /\./)) {
