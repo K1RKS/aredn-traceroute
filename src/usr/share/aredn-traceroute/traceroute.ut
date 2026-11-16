@@ -1,7 +1,7 @@
 {%
 /*
  * Tools → Traceroute dialog (aredn-traceroute drop-in).
- * Based on AREDN firmware tools/e/traceroute.ut; adds Copy / Copy JSON.
+ * Based on AREDN firmware tools/e/traceroute.ut; adds Copy of console text.
  * Marker: aredn-traceroute-ui
  */
 %}
@@ -44,7 +44,7 @@ const mynode = configuration.getName();
             %}
         </datalist>
         {{_H("Trace the route between a source host and a target. The source should be node on the mesh, and by default is the current node.
-        The target can be a node, an IP address, or any hostname that might be reachable. Copy / Copy JSON need a completed run; JSON requires aredn-traceroute on the source.")}}
+        The target can be a node, an IP address, or any hostname that might be reachable. Use Copy after a run to put the console text on the clipboard.")}}
         <div class="cols">
             <div class="tool-console">
                 <pre></pre>
@@ -58,7 +58,6 @@ const mynode = configuration.getName();
         <hr/>
         <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap">
             <button id="tool-copy" type="button" disabled title="Copy console output">Copy</button>
-            <button id="tool-copy-json" type="button" disabled title="Copy schemaVersion-1 JSON (source must have aredn-traceroute)">Copy JSON</button>
             <button id="dialog-done" onclick="setTimeout(_ => document.getElementById('ctrl-modal').close(), 10)">Done</button>
         </div>
     </div>
@@ -70,132 +69,85 @@ const mynode = configuration.getName();
         {% } %}
         const mynode = "{{mynode}}";
         const btnCopy = htmx.find("#tool-copy");
-        const btnCopyJson = htmx.find("#tool-copy-json");
-        let lastJsonText = "";
-        let lastJsonUrl = "";
-        let jsonFetchGen = 0;
         function setCopyEnabled(on) {
             btnCopy.disabled = !on;
         }
-        function setCopyJsonEnabled(on) {
-            btnCopyJson.disabled = !on;
-            if (!on) {
-                btnCopyJson.textContent = "Copy JSON";
-            }
-        }
-        function resetCopyState() {
-            lastJsonText = "";
-            lastJsonUrl = "";
-            jsonFetchGen++;
-            setCopyEnabled(false);
-            setCopyJsonEnabled(false);
-            btnCopy.textContent = "Copy";
-            btnCopyJson.textContent = "Copy JSON";
-        }
-        async function copyToClipboard(text, btn, idleLabel) {
-            if (!text) {
-                return;
-            }
-            const label = idleLabel || btn.textContent;
-            try {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    await navigator.clipboard.writeText(text);
-                }
-                else {
-                    const ta = document.createElement("textarea");
-                    ta.value = text;
-                    ta.setAttribute("readonly", "");
-                    ta.style.position = "fixed";
-                    ta.style.left = "-9999px";
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand("copy");
-                    ta.remove();
-                }
-                btn.textContent = "Copied";
-                setTimeout(() => { btn.textContent = label; }, 1200);
-            }
-            catch (_) {
-                btn.textContent = "Failed";
-                setTimeout(() => { btn.textContent = label; }, 1200);
-            }
+        function consoleEl() {
+            return htmx.find("#ctrl-modal .tool-console pre");
         }
         function consoleText() {
-            const con = htmx.find(".tool-console pre");
+            const con = consoleEl();
             return (con && con.innerText) ? con.innerText.replace(/\s+$/, "") : "";
         }
-        function meshHost(name) {
-            return `${name}${name.indexOf(".") == -1 ? ".local.mesh" : ""}`;
-        }
-        async function fetchJsonReport(url, gen) {
-            btnCopyJson.textContent = "Fetching…";
-            setCopyJsonEnabled(false);
+        function copyConsoleToClipboard() {
+            const con = consoleEl();
+            const text = consoleText();
+            if (!con || !text) {
+                return false;
+            }
+            // Prefer selecting the console <pre> (works on http:// mesh UI).
+            // navigator.clipboard.writeText requires a secure context (HTTPS).
             try {
-                const r = await fetch(url);
-                if (gen !== jsonFetchGen) {
-                    return;
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(con);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                const ok = document.execCommand("copy");
+                sel.removeAllRanges();
+                if (ok) {
+                    return true;
                 }
-                if (!r.ok) {
-                    throw new Error(`HTTP ${r.status}`);
-                }
-                const raw = (await r.text()).trim();
-                if (!raw) {
-                    throw new Error("empty JSON");
-                }
-                let pretty = raw;
-                try {
-                    const doc = JSON.parse(raw);
-                    if (!doc || doc.schemaVersion == null) {
-                        throw new Error("not schemaVersion JSON");
-                    }
-                    pretty = JSON.stringify(doc, null, 2);
-                }
-                catch (e) {
-                    throw e;
-                }
-                if (gen !== jsonFetchGen) {
-                    return;
-                }
-                lastJsonText = pretty;
-                lastJsonUrl = url;
-                btnCopyJson.textContent = "Copy JSON";
-                setCopyJsonEnabled(true);
             }
-            catch (_) {
-                if (gen !== jsonFetchGen) {
-                    return;
+            catch (_) {}
+            try {
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                ta.setAttribute("readonly", "");
+                ta.style.position = "fixed";
+                ta.style.left = "-9999px";
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                ta.setSelectionRange(0, ta.value.length);
+                const ok = document.execCommand("copy");
+                ta.remove();
+                if (ok) {
+                    return true;
                 }
-                lastJsonText = "";
-                btnCopyJson.textContent = "Copy JSON";
-                setCopyJsonEnabled(false);
             }
+            catch (_) {}
+            return false;
         }
         htmx.on("#target-swap", "click", _ => {
             const v = htmx.find("#tool-target").value;
             htmx.find("#tool-target").value = htmx.find("#tool-client").value;
             htmx.find("#tool-client").value = v;
         });
-        htmx.on("#tool-copy", "click", async _ => {
-            await copyToClipboard(consoleText(), btnCopy, "Copy");
-        });
-        htmx.on("#tool-copy-json", "click", async _ => {
-            if (!lastJsonText && lastJsonUrl) {
-                await fetchJsonReport(lastJsonUrl, jsonFetchGen);
+        htmx.on("#tool-copy", "click", _ => {
+            const label = "Copy";
+            if (copyConsoleToClipboard()) {
+                btnCopy.textContent = "Copied";
+                setTimeout(() => { btnCopy.textContent = label; }, 1200);
             }
-            if (lastJsonText) {
-                await copyToClipboard(lastJsonText, btnCopyJson, "Copy JSON");
+            else {
+                btnCopy.textContent = "Failed";
+                setTimeout(() => { btnCopy.textContent = label; }, 1200);
             }
         });
         htmx.on("#tool-start", "click", async _ => {
             const server = htmx.find("#tool-target").value;
             const client = htmx.find("#tool-client").value;
             if (server && client) {
-                resetCopyState();
-                const con = htmx.find(".tool-console pre");
+                setCopyEnabled(false);
+                btnCopy.textContent = "Copy";
+                const con = consoleEl();
                 con.innerText = "";
-                let runOk = false;
                 function out(line) {
                     con.innerHTML += `${line}\n`;
+                }
+                function meshHost(name) {
+                    return `${name}${name.indexOf(".") == -1 ? ".local.mesh" : ""}`;
                 }
                 out("Traceroute test started");
                 out("");
@@ -203,7 +155,6 @@ const mynode = configuration.getName();
                     const host = meshHost(client);
                     const target = meshHost(server);
                     const url = `http://${host}/cgi-bin/traceroute?server=${encodeURIComponent(target)}`;
-                    lastJsonUrl = `${url}&format=json`;
                     const r = await fetch(url);
                     const reader = r.body.getReader();
                     let state = "BEGIN";
@@ -250,7 +201,6 @@ const mynode = configuration.getName();
                                     if (line) {
                                         if (line === "</pre></body></html>") {
                                             state = "DONE";
-                                            runOk = true;
                                             out("");
                                             out("Traceroute done");
                                             out("");
@@ -286,9 +236,6 @@ const mynode = configuration.getName();
                 }
                 if (consoleText()) {
                     setCopyEnabled(true);
-                }
-                if (runOk && lastJsonUrl) {
-                    setCopyJsonEnabled(true);
                 }
             }
         });
