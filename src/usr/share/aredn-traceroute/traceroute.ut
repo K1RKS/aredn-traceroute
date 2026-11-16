@@ -79,33 +79,64 @@ const mynode = configuration.getName();
             const con = consoleEl();
             return (con && con.innerText) ? con.innerText.replace(/\s+$/, "") : "";
         }
-        function copyConsoleToClipboard() {
+        function selectConsole() {
             const con = consoleEl();
-            const text = consoleText();
-            if (!con || !text) {
+            if (!con) {
                 return false;
             }
-            // Prefer selecting the console <pre> (works on http:// mesh UI).
-            // navigator.clipboard.writeText requires a secure context (HTTPS).
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(con);
+            sel.removeAllRanges();
+            sel.addRange(range);
+            return true;
+        }
+        // Mesh UI is http:// (not a secure context), so navigator.clipboard is
+        // usually unavailable. Prefer execCommand; fall back to opening text.
+        function copyConsoleToClipboard() {
+            const text = consoleText();
+            if (!text) {
+                return "empty";
+            }
+            // 1) copy event + execCommand (no selection required)
+            let filled = false;
+            const onCopy = (e) => {
+                try {
+                    e.clipboardData.setData("text/plain", text);
+                    e.preventDefault();
+                    filled = true;
+                }
+                catch (_) {}
+            };
+            document.addEventListener("copy", onCopy);
             try {
-                const sel = window.getSelection();
-                const range = document.createRange();
-                range.selectNodeContents(con);
-                sel.removeAllRanges();
-                sel.addRange(range);
-                const ok = document.execCommand("copy");
-                sel.removeAllRanges();
-                if (ok) {
-                    return true;
+                if (document.execCommand("copy") || filled) {
+                    return "copied";
                 }
             }
             catch (_) {}
+            finally {
+                document.removeEventListener("copy", onCopy);
+            }
+            // 2) Select console <pre> (same as manual select) then copy
+            try {
+                if (selectConsole() && document.execCommand("copy")) {
+                    window.getSelection().removeAllRanges();
+                    return "copied";
+                }
+            }
+            catch (_) {}
+            // 3) Off-screen textarea
             try {
                 const ta = document.createElement("textarea");
                 ta.value = text;
                 ta.setAttribute("readonly", "");
                 ta.style.position = "fixed";
-                ta.style.left = "-9999px";
+                ta.style.top = "0";
+                ta.style.left = "0";
+                ta.style.width = "1px";
+                ta.style.height = "1px";
+                ta.style.opacity = "0";
                 document.body.appendChild(ta);
                 ta.focus();
                 ta.select();
@@ -113,11 +144,26 @@ const mynode = configuration.getName();
                 const ok = document.execCommand("copy");
                 ta.remove();
                 if (ok) {
-                    return true;
+                    return "copied";
                 }
             }
             catch (_) {}
-            return false;
+            // 4) Leave console selected so Ctrl/Cmd+C works, and open plain text
+            //    (same idea as Tools → Tunnels clipboard helper).
+            try {
+                selectConsole();
+            }
+            catch (_) {}
+            try {
+                const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+                const w = window.open(url, "_blank");
+                if (w) {
+                    setTimeout(() => URL.revokeObjectURL(url), 60000);
+                    return "opened";
+                }
+            }
+            catch (_) {}
+            return "selected";
         }
         htmx.on("#target-swap", "click", _ => {
             const v = htmx.find("#tool-target").value;
@@ -125,15 +171,22 @@ const mynode = configuration.getName();
             htmx.find("#tool-client").value = v;
         });
         htmx.on("#tool-copy", "click", _ => {
-            const label = "Copy";
-            if (copyConsoleToClipboard()) {
+            const result = copyConsoleToClipboard();
+            let label = "Copy";
+            if (result === "copied") {
                 btnCopy.textContent = "Copied";
-                setTimeout(() => { btnCopy.textContent = label; }, 1200);
+            }
+            else if (result === "opened") {
+                btnCopy.textContent = "Opened";
+                label = "Copy";
+            }
+            else if (result === "selected") {
+                btnCopy.textContent = "Ctrl+C";
             }
             else {
                 btnCopy.textContent = "Failed";
-                setTimeout(() => { btnCopy.textContent = label; }, 1200);
             }
+            setTimeout(() => { btnCopy.textContent = "Copy"; }, 1500);
         });
         htmx.on("#tool-start", "click", async _ => {
             const server = htmx.find("#tool-target").value;
