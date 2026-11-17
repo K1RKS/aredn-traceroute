@@ -253,7 +253,7 @@ export function shortMeshName(name)
 /* Keep in sync with build.sh -v/-r (and bump-traceroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.30-r0";
+    return "0.1.32-r0";
 };
 
 /**
@@ -497,6 +497,38 @@ export function seedLocal(ctx)
     });
 };
 
+/* Mesh identity: br-mesh on RF nodes, br-nomesh on tunnel servers that have no mesh bridge. */
+function meshIpFromSysinfo(info, hostOrIp)
+{
+    if (info && info.ip && match(info.ip, /^10\./)) {
+        return info.ip;
+    }
+    const ifaces = (info && info.interfaces) ? info.interfaces : [];
+    let nomesh = null;
+    for (let i = 0; i < length(ifaces); i++) {
+        const iface = ifaces[i];
+        if (!iface || !iface.ip || !match(iface.ip, /^10\./)) {
+            continue;
+        }
+        if (iface.name === "br-mesh") {
+            return iface.ip;
+        }
+        if (iface.name === "br-nomesh") {
+            nomesh = iface.ip;
+        }
+    }
+    if (nomesh) {
+        return nomesh;
+    }
+    if (info && info.ip && !match(info.ip, /^172\.(29|30|31)\./)) {
+        return info.ip;
+    }
+    if (hostOrIp && match(hostOrIp, /^10\.[0-9]+\.[0-9]+\.[0-9]+$/)) {
+        return hostOrIp;
+    }
+    return null;
+}
+
 function fetchJson(url)
 {
     const p = fs.popen(`${UFETCH} -T ${FETCH_TIMEOUT} "${url}" -O - 2> /dev/null`);
@@ -548,6 +580,7 @@ export function ensureNode(ctx, hostOrIp)
             hostname: hostOrIp,
             ip: match(hostOrIp, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? hostOrIp : null,
             firmwareVersion: null,
+            interfaces: [],
             trackers: {},
             byIp: {},
             byHost: {}
@@ -556,7 +589,7 @@ export function ensureNode(ctx, hostOrIp)
 
     const trackers = (info.lqm && info.lqm.info && info.lqm.info.trackers) ? info.lqm.info.trackers : {};
     const idx = indexTrackers(trackers);
-    const ip = info.ip || (match(hostOrIp, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? hostOrIp : null);
+    const ip = meshIpFromSysinfo(info, hostOrIp);
     const hostname = info.node || info.hostname || hostOrIp;
     const firmwareVersion = (info.node_details && info.node_details.firmware_version)
         ? info.node_details.firmware_version
@@ -583,6 +616,7 @@ export function ensureNode(ctx, hostOrIp)
         hostname: hostname,
         ip: ip,
         firmwareVersion: firmwareVersion,
+        interfaces: info.interfaces || [],
         trackers: trackers,
         byIp: idx.byIp,
         byHost: idx.byHost
@@ -622,7 +656,7 @@ function rebindEntry(ctx, failedOrOld, good)
     if (failedOrOld.key && failedOrOld.key !== good.key) {
         ctx.byKey[failedOrOld.key] = good;
     }
-    if (failedOrOld.displayName) {
+    if (failedOrOld.displayName && !match(failedOrOld.displayName, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)) {
         good.displayName = good.displayName || failedOrOld.displayName;
         const dk = cacheKey(failedOrOld.displayName);
         if (dk) {
@@ -914,7 +948,7 @@ export function enrichHop(ctx, prevKey, hop)
                     rebindEntry(ctx, node, byName);
                 }
                 node = byName;
-                if (byName.hostname && !isIpv4(byName.hostname)) {
+                if (byName.hostname && !isIpv4(byName.hostname) && !hop.tunnelIp) {
                     resolved = { name: meshHost(byName.hostname) || byName.hostname, source: "sysinfo" };
                 }
             }
@@ -942,6 +976,15 @@ export function enrichHop(ctx, prevKey, hop)
                 ctx.hostIndex[hk] = node.key;
             }
         }
+        if (hop.tunnelIp && !node.failed) {
+            const old = ctx.byKey[hop.tunnelIp];
+            if (old && old !== node) {
+                rebindEntry(ctx, old, node);
+            }
+            else if (!old) {
+                ctx.byKey[hop.tunnelIp] = node;
+            }
+        }
     }
     const wantGps = ctx.wantGps ? true : false;
     const txRxInfo = ctx.txRxInfo !== false;
@@ -955,7 +998,11 @@ export function enrichHop(ctx, prevKey, hop)
         nextKey = node.key;
     }
     const notes = [];
-    if (nameFromPrev) {
+    if (hop.tunnelIp) {
+        const shown = (hop.ip && match(hop.ip, /^10\./)) ? hop.ip : ((node && node.ip) ? node.ip : hop.ip);
+        push(notes, `    # name: ${shortMeshName(hostname)} (${shown}) owns tunnel address ${hop.tunnelIp} (${hop.tunnelVia || "tunnel interface"})`);
+    }
+    else if (nameFromPrev) {
         if (nameFromPrev.source === "previous_lqm_via_hostname") {
             push(notes, `    # name: ${hostname} from previous hop ${nameFromPrev.from} LQM (refetched via mesh hostname after traceroute IP failed)`);
         }
@@ -1019,6 +1066,393 @@ export function enrichHop(ctx, prevKey, hop)
     };
 };
 
+/*
+ * 172.29/30/31 hops are WireGuard interface addresses of the router that sent
+ * ICMP time-exceeded. They are not mesh routes, and current LQM sysinfo often
+ * lists that neighbor only by hostname + canonical 10. address (no tunnel ip).
+ * The address itself is on the router's sysinfo interface list.
+ */
+function isTunnelHopIp(ip)
+{
+    return ip && match(ip, /^172\.(29|30|31)\.[0-9]+\.[0-9]+$/) ? true : false;
+}
+
+function canonHost(name)
+{
+    if (!name || name === "*") {
+        return null;
+    }
+    let h = lc(trim(name));
+    h = replace(h, /\.local\.mesh$/, "");
+    h = replace(h, /^dtdlink\./, "");
+    h = replace(h, /^supernode\./, "");
+    h = replace(h, /^lan\./, "");
+    h = replace(h, /^xlink[0-9]+\./, "");
+    h = replace(h, /^mid[0-9]+\./, "");
+    if (!h || isIpv4(h)) {
+        return null;
+    }
+    return h;
+}
+
+function interfaceHasIp(entry, ip)
+{
+    if (!entry || !ip || !entry.interfaces) {
+        return false;
+    }
+    for (let i = 0; i < length(entry.interfaces); i++) {
+        const iface = entry.interfaces[i];
+        if (!iface || !iface.ip) {
+            continue;
+        }
+        let addr = iface.ip;
+        const slash = match(addr, /^([^/]+)/);
+        if (slash) {
+            addr = slash[1];
+        }
+        if (addr === ip) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function meshIpOf(node, hint)
+{
+    if (node && node.ip && match(node.ip, /^10\./)) {
+        return node.ip;
+    }
+    if (hint && match(hint, /^10\./)) {
+        return hint;
+    }
+    if (node && node.interfaces) {
+        let nomesh = null;
+        for (let i = 0; i < length(node.interfaces); i++) {
+            const iface = node.interfaces[i];
+            if (!iface || !iface.ip || !match(iface.ip, /^10\./)) {
+                continue;
+            }
+            if (iface.name === "br-mesh") {
+                return iface.ip;
+            }
+            if (iface.name === "br-nomesh") {
+                nomesh = iface.ip;
+            }
+        }
+        if (nomesh) {
+            return nomesh;
+        }
+    }
+    return null;
+}
+
+function trackerNeighbors(entry)
+{
+    const out = [];
+    const seen = {};
+    if (!entry || entry.failed || !entry.trackers) {
+        return out;
+    }
+    for (let mac in entry.trackers) {
+        const t = entry.trackers[mac];
+        if (!t) {
+            continue;
+        }
+        const host = canonHost(t.hostname);
+        if (!host || seen[host]) {
+            continue;
+        }
+        seen[host] = true;
+        let meshIp = null;
+        if (t.canonical_ip && match(t.canonical_ip, /^10\./)) {
+            meshIp = t.canonical_ip;
+        }
+        push(out, {
+            host: host,
+            meshIp: meshIp,
+            type: t.type || ""
+        });
+    }
+    return out;
+}
+
+function tunnelHopUnresolved(hop)
+{
+    return hop && !hop.unreachable && !hop.tunnelIp && isTunnelHopIp(hop.ip);
+}
+
+function anchorAt(ctx, item)
+{
+    if (!item || item.kind !== "hop" || !item.hop || item.hop.unreachable || !item.enriched) {
+        return null;
+    }
+    const rec = item.enriched.record;
+    if (!rec || rec.unreachable) {
+        return null;
+    }
+    // Still-raw tunnel hops cannot anchor; ones already rewritten to name + 10. can.
+    if (tunnelHopUnresolved(item.hop)) {
+        return null;
+    }
+    if (isIpv4(rec.hostname) && !item.hop.tunnelIp) {
+        return null;
+    }
+    const node = ctx.byKey[item.enriched.nextKey];
+    if (!node || node.failed) {
+        return null;
+    }
+    const label = shortMeshName(node.displayName || node.hostname || rec.hostname || node.ip || "?");
+    return { node: node, label: label };
+}
+
+function reenrichFrom(ctx, events, fromIdx)
+{
+    if (fromIdx == null || fromIdx < 0) {
+        return;
+    }
+    let prevKey = ctx.localKey;
+    for (let i = 0; i < length(events); i++) {
+        const item = events[i];
+        if (!item || item.kind !== "hop") {
+            continue;
+        }
+        if (item.hop.unreachable) {
+            continue;
+        }
+        if (i >= fromIdx) {
+            item.enriched = enrichHop(ctx, prevKey, item.hop);
+        }
+        prevKey = item.enriched.nextKey;
+    }
+}
+
+function nearestAnchor(ctx, events, idx, step)
+{
+    for (let i = idx + step; i >= 0 && i < length(events); i += step) {
+        const a = anchorAt(ctx, events[i]);
+        if (a) {
+            return a;
+        }
+    }
+    return null;
+}
+
+function queueNeighbors(list, seen, neighbors, via, skip)
+{
+    const wg = [];
+    const other = [];
+    for (let i = 0; i < length(neighbors); i++) {
+        const n = neighbors[i];
+        if (!n || !n.host || seen[n.host] || (skip && skip[n.host])) {
+            continue;
+        }
+        if (n.type === "Wireguard" || n.type === "Xlink") {
+            push(wg, n);
+        }
+        else {
+            push(other, n);
+        }
+    }
+    for (let i = 0; i < length(wg); i++) {
+        seen[wg[i].host] = true;
+        push(list, { host: wg[i].host, meshIp: wg[i].meshIp, via: via });
+    }
+    for (let i = 0; i < length(other); i++) {
+        seen[other[i].host] = true;
+        push(list, { host: other[i].host, meshIp: other[i].meshIp, via: via });
+    }
+}
+
+function ownerFromNode(node, hintIp, via)
+{
+    if (!node || node.failed) {
+        return null;
+    }
+    const meshIp = meshIpOf(node, hintIp);
+    const name = canonHost(node.hostname) || canonHost(node.displayName);
+    if (!name || !meshIp) {
+        return null;
+    }
+    return { name: name, meshIp: meshIp, via: via };
+}
+
+/*
+ * Find the node that owns a traceroute tunnel address.
+ * Prefer a neighbor listed by both the previous and next non-tunnel hops,
+ * then the other neighbors of those hops. Accept a candidate only when its
+ * sysinfo interface list contains the tunnel address.
+ */
+function findTunnelOwner(ctx, events, idx)
+{
+    const hop = events[idx].hop;
+    const tunnelIp = hop.ip;
+    const named = canonHost(hop.hostname);
+    if (named) {
+        const namedNode = ensureNode(ctx, named);
+        if (namedNode && !namedNode.failed && interfaceHasIp(namedNode, tunnelIp)) {
+            const ident = ownerFromNode(namedNode, null, "sysinfo for traceroute name");
+            if (ident) {
+                return ident;
+            }
+        }
+    }
+
+    let prev = nearestAnchor(ctx, events, idx, -1);
+    if (!prev && ctx.byKey[ctx.localKey] && !ctx.byKey[ctx.localKey].failed) {
+        const local = ctx.byKey[ctx.localKey];
+        prev = {
+            node: local,
+            label: shortMeshName(local.displayName || local.hostname || "this node")
+        };
+    }
+    const next = nearestAnchor(ctx, events, idx, 1);
+    const prevNode = prev ? prev.node : null;
+    const nextNode = next ? next.node : null;
+    const prevLabel = prev ? prev.label : null;
+    const nextLabel = next ? next.label : null;
+
+    if (prevNode && interfaceHasIp(prevNode, tunnelIp)) {
+        const ident = ownerFromNode(prevNode, null, `interface on ${prevLabel}`);
+        if (ident) {
+            return ident;
+        }
+    }
+    if (nextNode && interfaceHasIp(nextNode, tunnelIp)) {
+        const ident = ownerFromNode(nextNode, null, `interface on ${nextLabel}`);
+        if (ident) {
+            return ident;
+        }
+    }
+
+    const prevN = trackerNeighbors(prevNode);
+    const nextN = trackerNeighbors(nextNode);
+    const skip = {};
+    if (prevLabel) {
+        const ph = canonHost(prevLabel);
+        if (ph) {
+            skip[ph] = true;
+        }
+    }
+    if (nextLabel) {
+        const nh = canonHost(nextLabel);
+        if (nh) {
+            skip[nh] = true;
+        }
+    }
+    const candidates = [];
+    const seen = {};
+    if (prevLabel && nextLabel) {
+        const nextByHost = {};
+        for (let i = 0; i < length(nextN); i++) {
+            nextByHost[nextN[i].host] = nextN[i];
+        }
+        const bothVia = `common neighbor of ${prevLabel} and ${nextLabel}`;
+        for (let i = 0; i < length(prevN); i++) {
+            const n = prevN[i];
+            if (!nextByHost[n.host] || seen[n.host] || skip[n.host]) {
+                continue;
+            }
+            seen[n.host] = true;
+            push(candidates, { host: n.host, meshIp: n.meshIp || nextByHost[n.host].meshIp, via: bothVia });
+        }
+    }
+    if (prevLabel) {
+        queueNeighbors(candidates, seen, prevN, `neighbor of ${prevLabel}`, skip);
+    }
+    if (nextLabel) {
+        queueNeighbors(candidates, seen, nextN, `neighbor of ${nextLabel}`, skip);
+    }
+
+    const maxFetches = 32;
+    let fetched = 0;
+    for (let i = 0; i < length(candidates) && fetched < maxFetches; i++) {
+        const c = candidates[i];
+        const key = c.meshIp || c.host;
+        const cached = ctx.byKey[cacheKey(key)];
+        if (!cached) {
+            fetched++;
+        }
+        const node = ensureNode(ctx, key);
+        if (!node || node.failed || !interfaceHasIp(node, tunnelIp)) {
+            continue;
+        }
+        const ident = ownerFromNode(node, c.meshIp, c.via);
+        if (ident) {
+            return ident;
+        }
+    }
+    return null;
+}
+
+function applyTunnelIdentity(ctx, item, ident)
+{
+    item.hop.tunnelIp = item.hop.ip;
+    item.hop.tunnelVia = ident.via;
+    item.hop.hostname = ident.name;
+    if (ident.meshIp) {
+        item.hop.ip = ident.meshIp;
+    }
+    // Prefetch owner sysinfo so the following re-enrich (and later passes) can
+    // use this hop as an LQM anchor for neighboring unresolved tunnel hops.
+    const owner = ensureNode(ctx, ident.meshIp || ident.name);
+    if (owner && !owner.failed) {
+        const old = ctx.byKey[item.hop.tunnelIp];
+        if (old && old !== owner) {
+            rebindEntry(ctx, old, owner);
+        }
+        else if (!old) {
+            ctx.byKey[item.hop.tunnelIp] = owner;
+        }
+        owner.displayName = owner.displayName || ident.name;
+    }
+}
+
+/*
+ * Resolve 172.29/30/31 hops, then repeat. Newly named hops become anchors so a
+ * middle tunnel hop can resolve once its neighbors on either side are known.
+ */
+function resolveTunnelHops(ctx, events)
+{
+    let earliest = -1;
+    const maxPasses = length(events) + 2;
+    for (let pass = 0; pass < maxPasses; pass++) {
+        let resolvedThisPass = 0;
+        let passEarliest = -1;
+        for (let i = 0; i < length(events); i++) {
+            const item = events[i];
+            if (!item || item.kind !== "hop" || !tunnelHopUnresolved(item.hop)) {
+                continue;
+            }
+            const ident = findTunnelOwner(ctx, events, i);
+            if (!ident) {
+                continue;
+            }
+            applyTunnelIdentity(ctx, item, ident);
+            resolvedThisPass++;
+            if (passEarliest < 0) {
+                passEarliest = i;
+            }
+        }
+        if (resolvedThisPass === 0) {
+            break;
+        }
+        if (earliest < 0 || passEarliest < earliest) {
+            earliest = passEarliest;
+        }
+        // Rebuild enrichment so newly named hops expose LQM for the next pass.
+        reenrichFrom(ctx, events, earliest);
+    }
+    for (let i = 0; i < length(events); i++) {
+        const item = events[i];
+        if (!item || item.kind !== "hop" || !item.hop || !tunnelHopUnresolved(item.hop)) {
+            continue;
+        }
+        if (item.enriched && item.enriched.notes) {
+            push(item.enriched.notes, `    # name: tunnel address ${item.hop.ip} matched no interface on the previous or next mesh hop`);
+        }
+    }
+}
+
 /**
  * Run traceroute and emit lines via printFn(line).
  * options.verbose: when true, print why unset fields are missing.
@@ -1050,6 +1484,7 @@ export function runEnrichedTraceroute(dest, printFn, options)
     seedLocal(ctx);
     let prevKey = ctx.localKey;
     const hops = [];
+    const events = [];
 
     const running = fs.popen(`/bin/traceroute -q 1 -w 1 ${dest} 2>&1`);
     if (!running) {
@@ -1059,42 +1494,51 @@ export function runEnrichedTraceroute(dest, printFn, options)
         line = replace(line, /\r?\n$/, "");
         const hop = parseHopLine(line);
         if (hop) {
-            if (headerPending && printFn) {
-                printFn(headerLine);
-                headerPending = false;
-            }
             const enriched = enrichHop(ctx, prevKey, hop);
-            if (printFn) {
-                printFn(enriched.line);
-                if (verbose && enriched.notes) {
-                    for (let i = 0; i < length(enriched.notes); i++) {
-                        printFn(enriched.notes[i]);
-                    }
-                }
-            }
-            if (collectHops && enriched.record) {
-                push(hops, enriched.record);
-            }
+            push(events, { kind: "hop", hop: hop, enriched: enriched });
             if (!hop.unreachable) {
                 prevKey = enriched.nextKey;
             }
         }
         else {
+            push(events, { kind: "line", text: line });
+        }
+    }
+    running.close();
+    resolveTunnelHops(ctx, events);
+    for (let i = 0; i < length(events); i++) {
+        const ev = events[i];
+        if (ev.kind === "line") {
             if (printFn) {
-                printFn(line);
+                printFn(ev.text);
             }
-            if (headerPending && match(line, /^traceroute/)) {
+            if (headerPending && match(ev.text, /^traceroute/)) {
                 if (printFn) {
                     printFn(headerLine);
                 }
                 headerPending = false;
             }
+            continue;
+        }
+        if (headerPending && printFn) {
+            printFn(headerLine);
+            headerPending = false;
+        }
+        if (printFn) {
+            printFn(ev.enriched.line);
+            if (verbose && ev.enriched.notes) {
+                for (let n = 0; n < length(ev.enriched.notes); n++) {
+                    printFn(ev.enriched.notes[n]);
+                }
+            }
+        }
+        if (collectHops && ev.enriched.record) {
+            push(hops, ev.enriched.record);
         }
     }
     if (headerPending && printFn) {
         printFn(headerLine);
     }
-    running.close();
     if (collectHops) {
         return { ok: true, hops: hops, dest: dest };
     }

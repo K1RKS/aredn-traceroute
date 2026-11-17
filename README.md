@@ -14,7 +14,7 @@ Example (default: tx/rx info on, no GPS, no node version):
 
 ```text
 traceroute to nodeD.local.mesh (10.1.2.5), 30 hops max, 46 byte packets
-Aredn-Traceroute(0.1.30-r0): Babel Metric 4078
+Aredn-Traceroute(0.1.32-r0): Babel Metric 4078
  1 nodeB (10.1.2.3) 23 ms DtD 96/96 (100%/100%) 352 0%
  2 nodeC (10.1.2.4) 123 ms RF 3593/3520 (98%/99%) 3945 1%
  3 nodeD (175.0.1.3) 19 ms WG 133/133 (100%/100%) 4078 0%
@@ -42,9 +42,9 @@ With `-gps`:
 
 ## Install
 
-1. Build (or download) `aredn-traceroute-0.1.30-r0.apk`
+1. Build (or download) `aredn-traceroute-0.1.32-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted aredn-traceroute-0.1.30-r0.apk`
+   or: `apk add --allow-untrusted aredn-traceroute-0.1.32-r0.apk`
 3. Tools → Traceroute uses the drop-in CGI and Tools UI (Copy button) when this package is installed on the **node you open Tools on**; enriched hop lines need the package on the **source** node (GPS off unless `gps=1` is in the query string; `node_version=1` / `tx_rx_info=0` supported). After install, wait a few seconds for `uhttpd` to refresh so the Copy button appears.
 4. CLI: `aredn-traceroute <destination>`  
    GPS: `aredn-traceroute -gps <destination>`  
@@ -56,6 +56,8 @@ With `-gps`:
 
 When traceroute only returns an IP for a hop, the display name is filled from that hop’s `/a/sysinfo` `node` field, or from the previous hop’s LQM neighbor hostname. The `(IP)` still shows the hop address. If the previous hop’s traceroute IP failed sysinfo but its name was learned from the hop before that, later lookups re-fetch that previous hop via its mesh hostname (and mesh IP) so LQM/type/cost/metric/name can still be resolved.
 
+A `172.29` / `172.30` / `172.31` hop is a WireGuard interface address on the router that answered traceroute. That address is not a mesh route, and the previous hop’s LQM often knows the neighbor only by hostname and canonical `10.` address. aredn-traceroute then looks at the previous and next hops that are not unresolved tunnel addresses, finds neighbors they have in common (then their other neighbors), and fetches each candidate’s sysinfo. The candidate whose interface list contains the tunnel address is printed as its node name and `10.` mesh IP. When several tunnel hops appear in a row, the search repeats after each newly named hop so an inner hop can use the ends that just resolved.
+
 On install, the package backs up the firmware `/www/cgi-bin/traceroute` (when present) and installs a drop-in. On remove, a `.pre-deinstall` script restores that backup (or a packaged firmware copy if the backup was never taken — e.g. older APKs that overwrote the CGI in place on a writable rootfs).
 
 ## Build
@@ -63,7 +65,7 @@ On install, the package backs up the firmware `/www/cgi-bin/traceroute` (when pr
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/aredn-traceroute-0.1.30-r0.apk
+# → dist/aredn-traceroute-0.1.32-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
@@ -89,6 +91,7 @@ Emits a `schemaVersion: 1` document shared with stableroute and Nodographer visu
 2. Seed local Babel host-route metrics and local LQM (`/tmp/lqm.info`) for first-hop type/cost/success/errors.
 3. For each new hop node, fetch **once**: `http://{node}/a/sysinfo?lqm=1` (neighbor trackers; lat/lon used only with `-gps`). Cache by mesh IP/hostname for the rest of the run; failed fetches are cached so timeouts are not repeated.
 4. Type, **txcost/rxcost**, **(tx%/rx% success)**, and **neighbor errors%** come from the **previous** hop’s cached LQM neighbor entry for this hop. Path **metric** comes from this node’s Babel host route to the hop IP (or that hop’s mesh IP from sysinfo). GPS (optional) comes from the hop’s cached sysinfo.
+5. After the path is known, each unresolved `172.29/30/31` hop is matched to a neighbor of the surrounding named hops whose sysinfo interfaces include that address. The printed hop becomes that node’s name and `10.` mesh IP. The match repeats until a pass finds no new names, then link data is looked up again from those nodes.
 
 Missing values print as `-`. Unreachable hops (`* * *`) are not enriched.
 
